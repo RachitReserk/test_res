@@ -353,7 +353,7 @@ export async function confirmOrder(orderId: number , checkoutData: any) {
 
     const roomName = `restaurants/${restaurantId}/branches/${branch}/orders`;
 
-   /*const socket = await fetch(process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || "", {
+   const socket = await fetch(process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || "", {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -364,7 +364,7 @@ export async function confirmOrder(orderId: number , checkoutData: any) {
         event: 'new-order',
         data: checkoutData, // The full order details for the admin panel
       }),
-    }); */
+    });
     
     console.log("Socket response:", socket.status, await socket.text());
 
