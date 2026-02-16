@@ -121,14 +121,17 @@ export default function CheckoutPage() {
   const [activeStep, setActiveStep] = useState(1)
   const [deliveryQuoteRequested, setDeliveryQuoteRequested] = useState(false)
   
-  // --- NEW STATE: Delivery Scheduling ---
+  // --- Delivery Scheduling ---
   const [availableProviders, setAvailableProviders] = useState<string[]>([])
   const [selectedProvider, setSelectedProvider] = useState<string>("") 
   const [deliveryProvider, setDeliveryProvider] = useState<string | null>(null)
-  
   const [deliveryTiming, setDeliveryTiming] = useState<"asap" | "scheduled">("asap")
   const [scheduledSlot, setScheduledSlot] = useState<string>("") // HH:MM
   const [scheduleError, setScheduleError] = useState<string | null>(null)
+
+  // --- Pickup Scheduling (NEW) ---
+  const [pickupTiming, setPickupTiming] = useState<"asap" | "scheduled">("asap")
+  const [pickupScheduledSlot, setPickupScheduledSlot] = useState<string>("") // HH:MM
 
   // State for item modal for free item offers
   const [isCheckoutItemModalOpen, setIsCheckoutItemModalOpen] = useState(false)
@@ -152,9 +155,7 @@ export default function CheckoutPage() {
 
   // State for modals
   const [showAddressDialog, setShowAddressDialog] = useState(false)
-  const [showTimeModal, setShowTimeModal] = useState(false)
-  const [selectedTime, setSelectedTime] = useState<string>("")
-
+  
   // State for new address form
   const [newAddress, setNewAddress] = useState({
     name: "",
@@ -311,7 +312,7 @@ export default function CheckoutPage() {
       setActiveStep(1)
     } else if (
       (data.mode === "delivery" && (!data.selected_address || !data.quote_created)) ||
-      (data.mode === "pickup" && !data.pickup_time)
+      (data.mode === "pickup") // Pickup step logic handled inside step 2 rendering
     ) {
       setActiveStep(2)
     } else {
@@ -347,10 +348,8 @@ export default function CheckoutPage() {
             loadDeliveryProviders(checkout.order_id)
           }
 
-          // Check if there is a pickup_time
           if (checkout.pickup_time) {
             setDeliveryTiming("scheduled")
-            // Parse HH:MM from server string
             const existingDate = new Date(checkout.pickup_time)
             if (!isNaN(existingDate.getTime())) {
                 const hour = String(existingDate.getHours()).padStart(2, '0')
@@ -367,9 +366,33 @@ export default function CheckoutPage() {
             setCheckoutData(checkout)
           }
         } else if (checkout.mode === "pickup") {
-          setDeliveryQuoteRequested(false)
-          setDeliveryProvider(null)
-          setDeliveryTiming("asap")
+            setDeliveryQuoteRequested(false)
+            setDeliveryProvider(null)
+            
+            // --- SYNC PICKUP TIMING ---
+            // Logic: Even ASAP has a pickup_time now (current time).
+            // We differentiate by checking if the time is significantly in the future (e.g., > 30 mins)
+            if (checkout.pickup_time) {
+                const pickupDate = new Date(checkout.pickup_time)
+                const now = new Date()
+                const diffInMinutes = (pickupDate.getTime() - now.getTime()) / 60000
+
+                // If pickup time is more than 30 mins away, assume Scheduled. 
+                // Otherwise assume ASAP (as ASAP sets it to 'now').
+                if (diffInMinutes > 30) {
+                    setPickupTiming("scheduled")
+                    const hour = String(pickupDate.getHours()).padStart(2, '0')
+                    const minute = String(pickupDate.getMinutes()).padStart(2, '0')
+                    setPickupScheduledSlot(`${hour}:${minute}`)
+                } else {
+                    setPickupTiming("asap")
+                    setPickupScheduledSlot("")
+                }
+            } else {
+                // Fallback for old orders with null time
+                setPickupTiming("asap")
+                setPickupScheduledSlot("")
+            }
         }
 
         updateActiveStep(checkout)
@@ -404,7 +427,13 @@ export default function CheckoutPage() {
     setProcessingAction("mode")
     try {
       if (newMode === "pickup") {
-        setShowTimeModal(true)
+        // Set mode to pickup with CURRENT time (ASAP) instead of null
+        await setMode(checkoutData.order_id, "pickup", new Date().toISOString())
+        setPickupTiming("asap")
+        setPickupScheduledSlot("")
+        setDeliveryQuoteRequested(false)
+        setDeliveryProvider(null)
+        await fetchCheckoutData(false)
       } else {
         await setMode(checkoutData.order_id, newMode, undefined)
         setDeliveryQuoteRequested(false)
@@ -418,24 +447,40 @@ export default function CheckoutPage() {
     }
   }
 
-  const handleConfirmPickupTime = async () => {
-    if (!checkoutData?.order_id || !selectedTime) return
-    setProcessingAction("pickupTime")
-    try {
-      const today = new Date()
-      const [hours, minutes] = selectedTime.split(":")
-      today.setHours(Number(hours), Number(minutes), 0, 0)
-      const isoTime = today.toISOString()
-      await setMode(checkoutData.order_id, "pickup", isoTime)
-      setShowTimeModal(false)
-      setDeliveryQuoteRequested(false)
-      setDeliveryProvider(null)
-      await fetchCheckoutData(false)
-    } catch (err: any) {
-      toast.error(err.message || "Failed to set pickup time.")
-    } finally {
-      setProcessingAction(null)
-    }
+  const handlePickupTimingToggle = async (value: "asap" | "scheduled") => {
+      setPickupTiming(value)
+      
+      if (value === "asap" && checkoutData?.order_id) {
+          setProcessingAction("pickupSchedule")
+          try {
+               // Send CURRENT TIME for ASAP
+               await setMode(checkoutData.order_id, "pickup", new Date().toISOString())
+               setPickupScheduledSlot("")
+               await fetchCheckoutData(false)
+          } catch(err:any) {
+               toast.error("Failed to set pickup time to ASAP.")
+          } finally {
+               setProcessingAction(null)
+          }
+      }
+  }
+
+  const handlePickupSlotSelection = async (timeSlot: string) => {
+      if (!checkoutData?.order_id || !timeSlot) return
+      setPickupScheduledSlot(timeSlot)
+      setProcessingAction("pickupSchedule")
+      try {
+          const today = new Date()
+          const [hours, minutes] = timeSlot.split(":")
+          today.setHours(Number(hours), Number(minutes), 0, 0)
+          const isoTime = today.toISOString()
+          await setMode(checkoutData.order_id, "pickup", isoTime)
+          await fetchCheckoutData(false)
+      } catch (err: any) {
+          toast.error(err.message || "Failed to schedule pickup time.")
+      } finally {
+          setProcessingAction(null)
+      }
   }
 
   const handleDeliveryTimingToggle = async (value: "asap" | "scheduled") => {
@@ -697,14 +742,28 @@ export default function CheckoutPage() {
     
     const nextAvailableSlot = new Date(now)
     nextAvailableSlot.setSeconds(0, 0)
+    
+    // Round to next 30 min
     if (nextAvailableSlot.getMinutes() < 30) {
       nextAvailableSlot.setMinutes(30)
     } else {
       nextAvailableSlot.setHours(nextAvailableSlot.getHours() + 1)
       nextAvailableSlot.setMinutes(0)
     }
+    
+    // Ensure we are at least 30 mins from NOW for prep time (Standard ASAP is faster, scheduled has buffer)
+    const bufferTime = new Date(now.getTime() + 30 * 60000) 
+    let currentSlot = new Date(Math.max(startConstraint.getTime(), nextAvailableSlot.getTime(), bufferTime.getTime()))
+    
+    // Normalize minutes to 00 or 30 to keep grid clean
+    if (currentSlot.getMinutes() !== 0 && currentSlot.getMinutes() !== 30) {
+        if(currentSlot.getMinutes() < 30) currentSlot.setMinutes(30,0,0)
+        else {
+            currentSlot.setHours(currentSlot.getHours()+1)
+            currentSlot.setMinutes(0,0,0)
+        }
+    }
 
-    let currentSlot = new Date(Math.max(startConstraint.getTime(), nextAvailableSlot.getTime()))
     while (currentSlot <= endConstraint) {
        slots.push(currentSlot.toTimeString().slice(0, 5))
        currentSlot.setMinutes(currentSlot.getMinutes() + 30)
@@ -712,7 +771,7 @@ export default function CheckoutPage() {
     return slots
   }, [checkoutData])
 
-  // --- Delivery Time Slots (NEW) ---
+  // --- Delivery Time Slots ---
   const generateDeliverySlots = useMemo(() => {
     if (!checkoutData?.branch?.opening_time || !checkoutData?.branch?.closing_time) return []
     const slots = []
@@ -728,14 +787,12 @@ export default function CheckoutPage() {
     const closeDate = parseTime(closing_time)
     if (closeDate <= openDate) closeDate.setDate(closeDate.getDate() + 1)
     
-    // DELIVERY BUFFER: 45 mins (Increased for delivery logic)
-    const startConstraint = new Date(openDate.getTime() + 30 * 60000) // Opens 30 mins after start
+    // DELIVERY BUFFER: 45 mins
+    const startConstraint = new Date(openDate.getTime() + 30 * 60000)
     const endConstraint = new Date(closeDate.getTime() - 30 * 60000)
     
-    // Buffer from NOW: 45 Minutes
     const minDeliveryTime = new Date(now.getTime() + 45 * 60000)
 
-    // Round minDeliveryTime up to next 30 min slot
     if (minDeliveryTime.getMinutes() > 0 && minDeliveryTime.getMinutes() <= 30) {
         minDeliveryTime.setMinutes(30, 0, 0)
     } else if (minDeliveryTime.getMinutes() > 30) {
@@ -747,7 +804,6 @@ export default function CheckoutPage() {
 
     let currentSlot = new Date(Math.max(startConstraint.getTime(), minDeliveryTime.getTime()))
     
-    // Generate
     while (currentSlot <= endConstraint) {
        slots.push(currentSlot.toTimeString().slice(0, 5))
        currentSlot.setMinutes(currentSlot.getMinutes() + 30)
@@ -810,7 +866,8 @@ export default function CheckoutPage() {
   const isModeSelected = !!mode
   const isDeliveryDetailsComplete =
     mode === "delivery" && !!selected_address && (checkoutData?.quote_created || deliveryQuoteRequested)
-  const isPickupDetailsComplete = mode === "pickup" && !!pickup_time
+  // Logic updated: Pickup is complete if mode is pickup (default is ASAP), or if scheduled time is selected
+  const isPickupDetailsComplete = mode === "pickup"
   const areCoreDetailsComplete = isDeliveryDetailsComplete || isPickupDetailsComplete
   const isPaymentSelected = !!invoice.payment_method
 
@@ -932,17 +989,80 @@ export default function CheckoutPage() {
             areCoreDetailsComplete,
             <>
               {mode === "pickup" && (
-                <div>
-                  <p>Please select a pickup time.</p>
-                  <Button onClick={() => setShowTimeModal(true)} className="mt-2">
-                    Select Time
-                  </Button>
+                <div className="space-y-6">
+                   {/* --- Pickup Scheduling (Grid View) --- */}
+                  <div className="border-b pb-6">
+                      <h3 className="font-medium mb-3 flex items-center gap-2">
+                        <Clock className="h-4 w-4 text-orange-600" />
+                        When would you like to pickup?
+                      </h3>
+                      
+                      <RadioGroup
+                          value={pickupTiming}
+                          onValueChange={(val: "asap" | "scheduled") => handlePickupTimingToggle(val)}
+                          className="flex gap-4 mb-4"
+                          disabled={!!processingAction}
+                      >
+                           <Label
+                              htmlFor="pickup-asap"
+                              className={cn(
+                                "flex-1 p-3 border rounded-lg cursor-pointer transition-colors text-center text-sm font-medium",
+                                pickupTiming === "asap" && "border-orange-500 bg-orange-50 text-orange-700",
+                              )}
+                            >
+                              <RadioGroupItem value="asap" id="pickup-asap" className="sr-only" />
+                              Standard Pickup (ASAP)
+                            </Label>
+                            <Label
+                              htmlFor="pickup-scheduled"
+                              className={cn(
+                                "flex-1 p-3 border rounded-lg cursor-pointer transition-colors text-center text-sm font-medium",
+                                pickupTiming === "scheduled" && "border-orange-500 bg-orange-50 text-orange-700",
+                              )}
+                            >
+                              <RadioGroupItem value="scheduled" id="pickup-scheduled" className="sr-only" />
+                              Schedule for Later
+                            </Label>
+                      </RadioGroup>
+
+                      {/* PICKUP TIME SLOT GRID */}
+                      {pickupTiming === "scheduled" && (
+                          <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 animate-in fade-in zoom-in-95 duration-200">
+                             <div className="mb-3">
+                                 <p className="text-sm font-medium text-gray-700 mb-2">Select a time for today:</p>
+                                 {generatePickupTimeSlots.length > 0 ? (
+                                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                                        {generatePickupTimeSlots.map((time) => (
+                                          <Button
+                                            key={time}
+                                            variant="outline"
+                                            size="sm"
+                                            className={cn(
+                                              "w-full",
+                                              pickupScheduledSlot === time && "bg-orange-600 border-orange-600 text-white hover:bg-orange-700 hover:text-white"
+                                            )}
+                                            onClick={() => handlePickupSlotSelection(time)}
+                                            disabled={processingAction === "pickupSchedule"}
+                                          >
+                                            {new Date(`1970-01-01T${time}`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                                          </Button>
+                                        ))}
+                                    </div>
+                                 ) : (
+                                     <div className="text-center p-4 bg-white rounded border border-gray-200">
+                                         <p className="text-sm text-gray-500">No scheduled slots available for today.</p>
+                                     </div>
+                                 )}
+                             </div>
+                          </div>
+                      )}
+                  </div>
                 </div>
               )}
               {mode === "delivery" && (
                 <div className="space-y-6">
 
-                  {/* --- NEW SECTION: Delivery Scheduling (Grid View) --- */}
+                  {/* --- Delivery Scheduling (Grid View) --- */}
                   <div className="border-b pb-6">
                       <h3 className="font-medium mb-3 flex items-center gap-2">
                         <Clock className="h-4 w-4 text-orange-600" />
@@ -977,7 +1097,7 @@ export default function CheckoutPage() {
                             </Label>
                       </RadioGroup>
 
-                      {/* TIME SLOT GRID */}
+                      {/* DELIVERY TIME SLOT GRID */}
                       {deliveryTiming === "scheduled" && (
                           <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 animate-in fade-in zoom-in-95 duration-200">
                              <div className="mb-3">
@@ -1127,10 +1247,21 @@ export default function CheckoutPage() {
             </>,
             <>
               {isPickupDetailsComplete && (
-                <p className="flex items-center">
-                  <Clock className="h-4 w-4 mr-2" />
-                  Pickup for: {new Date(pickup_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </p>
+                <div className="space-y-1">
+                    {pickupTiming === "scheduled" && checkoutData?.pickup_time ? (
+                        <p className="flex items-center font-medium text-orange-700">
+                          <Clock className="h-4 w-4 mr-2" />
+                          Scheduled Pickup: {new Date(checkoutData.pickup_time).toLocaleTimeString([], {
+                              hour: "numeric", minute: "2-digit"
+                          })}
+                        </p>
+                    ) : (
+                        <p className="flex items-center font-medium">
+                          <Clock className="h-4 w-4 mr-2" />
+                          Standard Pickup (ASAP)
+                        </p>
+                    )}
+                </div>
               )}
               {isDeliveryDetailsComplete && (
                 <div className="space-y-1">
@@ -1535,36 +1666,6 @@ export default function CheckoutPage() {
           </Card>
         </div>
       </div>
-
-      <Dialog open={showTimeModal} onOpenChange={setShowTimeModal}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Select Pickup Time</DialogTitle>
-          </DialogHeader>
-          <div className="grid grid-cols-3 gap-2 py-4 max-h-64 overflow-y-auto">
-            {generatePickupTimeSlots.map((time) => (
-              <Button
-                key={time}
-                variant="outline"
-                className={cn(
-                  selectedTime === time && "bg-orange-600 border-orange-600 text-white hover:bg-orange-700",
-                )}
-                onClick={() => setSelectedTime(time)}
-              >
-                {new Date(`1970-01-01T${time}`).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </Button>
-            ))}
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowTimeModal(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleConfirmPickupTime} disabled={!selectedTime || processingAction === "pickupTime"}>
-              Confirm
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={showAddressDialog} onOpenChange={setShowAddressDialog}>
         <DialogContent className="sm:max-w-[425px]">
