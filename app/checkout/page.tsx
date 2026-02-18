@@ -22,6 +22,7 @@ import {
   Gift,
   Sparkles,
   Car,
+  Store, // Added for the closed state icon
 } from "lucide-react"
 import { PhoneInput } from "@/components/phone-input"
 import { isValidPhoneNumber } from "libphonenumber-js"
@@ -858,6 +859,27 @@ export default function CheckoutPage() {
         </Button>
       </div>
     )
+    
+  // New Block: Check if store is closed and block ordering
+  if (checkoutData.branch?.is_open_now === false) {
+     return (
+       <div className="w-full flex flex-col items-center justify-center min-h-screen p-4">
+        <div className="p-4 rounded-full bg-orange-100 mb-4">
+            <Store className="h-12 w-12 text-orange-600" />
+        </div>
+        <h2 className="text-2xl font-bold text-gray-800 mb-2">Store Currently Closed</h2>
+        <p className="text-gray-600 mb-6 text-center max-w-md">
+          {checkoutData.branch.name} is currently not accepting orders. 
+          Please check back during our opening hours: <span className="font-semibold">
+          {new Date(`1970-01-01T${checkoutData.branch.opening_time}`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} - {new Date(`1970-01-01T${checkoutData.branch.closing_time}`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+          </span>.
+        </p>
+        <Button onClick={() => router.push("/")} className="bg-orange-600 hover:bg-orange-700">
+          Return to Menu
+        </Button>
+      </div>
+     )
+  }
 
   const isModeSelected = !!mode
   const isDeliveryDetailsComplete =
