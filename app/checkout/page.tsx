@@ -311,8 +311,7 @@ export default function CheckoutPage() {
     if (!data.mode) {
       setActiveStep(1)
     } else if (
-      (data.mode === "delivery" && (!data.selected_address || !data.quote_created)) ||
-      (data.mode === "pickup") // Pickup step logic handled inside step 2 rendering
+      (data.mode === "delivery" && (!data.selected_address || !data.quote_created))
     ) {
       setActiveStep(2)
     } else {
@@ -320,7 +319,7 @@ export default function CheckoutPage() {
     }
   }
 
-  const fetchCheckoutData = async (showFullPageLoading = true) => {
+  const fetchCheckoutData = async (showFullPageLoading = true, targetStep?: number) => {
     if (showFullPageLoading) setLoading(true)
     setProcessingAction("fetch")
     try {
@@ -370,32 +369,25 @@ export default function CheckoutPage() {
             setDeliveryProvider(null)
             
             // --- SYNC PICKUP TIMING ---
-            // Logic: Even ASAP has a pickup_time now (current time).
-            // We differentiate by checking if the time is significantly in the future (e.g., > 30 mins)
+            // Logic: Backend sends null for ASAP.
+            // If pickup_time exists, it's scheduled. If null, it's ASAP.
             if (checkout.pickup_time) {
+                setPickupTiming("scheduled")
                 const pickupDate = new Date(checkout.pickup_time)
-                const now = new Date()
-                const diffInMinutes = (pickupDate.getTime() - now.getTime()) / 60000
-
-                // If pickup time is more than 30 mins away, assume Scheduled. 
-                // Otherwise assume ASAP (as ASAP sets it to 'now').
-                if (diffInMinutes > 30) {
-                    setPickupTiming("scheduled")
-                    const hour = String(pickupDate.getHours()).padStart(2, '0')
-                    const minute = String(pickupDate.getMinutes()).padStart(2, '0')
-                    setPickupScheduledSlot(`${hour}:${minute}`)
-                } else {
-                    setPickupTiming("asap")
-                    setPickupScheduledSlot("")
-                }
+                const hour = String(pickupDate.getHours()).padStart(2, '0')
+                const minute = String(pickupDate.getMinutes()).padStart(2, '0')
+                setPickupScheduledSlot(`${hour}:${minute}`)
             } else {
-                // Fallback for old orders with null time
                 setPickupTiming("asap")
                 setPickupScheduledSlot("")
             }
         }
 
-        updateActiveStep(checkout)
+        if (targetStep !== undefined) {
+          setActiveStep(targetStep)
+        } else {
+          updateActiveStep(checkout)
+        }
 
         if (checkout.order_id) {
           loadEligibleOffers(checkout.order_id)
@@ -427,18 +419,19 @@ export default function CheckoutPage() {
     setProcessingAction("mode")
     try {
       if (newMode === "pickup") {
-        // Set mode to pickup with CURRENT time (ASAP) instead of null
-        await setMode(checkoutData.order_id, "pickup", new Date().toISOString())
+        // Set mode to pickup with NULL time (ASAP)
+        await setMode(checkoutData.order_id, "pickup", null)
         setPickupTiming("asap")
         setPickupScheduledSlot("")
         setDeliveryQuoteRequested(false)
         setDeliveryProvider(null)
-        await fetchCheckoutData(false)
+        // Move to step 2 to allow checking time
+        await fetchCheckoutData(false, 2) 
       } else {
         await setMode(checkoutData.order_id, newMode, undefined)
         setDeliveryQuoteRequested(false)
         setDeliveryProvider(null)
-        await fetchCheckoutData(false)
+        await fetchCheckoutData(false, 2)
       }
     } catch (err: any) {
       toast.error(err.message || "Failed to update order type.")
@@ -453,10 +446,11 @@ export default function CheckoutPage() {
       if (value === "asap" && checkoutData?.order_id) {
           setProcessingAction("pickupSchedule")
           try {
-               // Send CURRENT TIME for ASAP
-               await setMode(checkoutData.order_id, "pickup", new Date().toISOString())
+               // Send NULL for ASAP
+               await setMode(checkoutData.order_id, "pickup", null)
                setPickupScheduledSlot("")
-               await fetchCheckoutData(false)
+               // Complete, move to Step 3
+               await fetchCheckoutData(false, 3) 
           } catch(err:any) {
                toast.error("Failed to set pickup time to ASAP.")
           } finally {
@@ -475,7 +469,8 @@ export default function CheckoutPage() {
           today.setHours(Number(hours), Number(minutes), 0, 0)
           const isoTime = today.toISOString()
           await setMode(checkoutData.order_id, "pickup", isoTime)
-          await fetchCheckoutData(false)
+          // Complete, move to Step 3
+          await fetchCheckoutData(false, 3)
       } catch (err: any) {
           toast.error(err.message || "Failed to schedule pickup time.")
       } finally {
@@ -514,7 +509,7 @@ export default function CheckoutPage() {
       const [hours, minutes] = timeSlot.split(":")
       today.setHours(Number(hours), Number(minutes), 0, 0)
 
-      // 2. Frontend Validation: Buffer Check (45 mins) - Redundant if grid is generated correctly, but good for safety
+      // 2. Frontend Validation: Buffer Check (45 mins)
       const minTime = new Date(Date.now() + 45 * 60000)
       if (today < minTime) {
          setScheduleError("Selected time is too soon. Please choose a later slot.")
@@ -605,7 +600,7 @@ export default function CheckoutPage() {
         setActiveStep(2)
         return
       }
-      await fetchCheckoutData(false)
+      await fetchCheckoutData(false, 3)
     } catch (err: any) {
       toast.error(err.message || "Failed to select address.")
       setActiveStep(2)
@@ -673,7 +668,8 @@ export default function CheckoutPage() {
     setProcessingAction("payment")
     try {
       await setPaymentMethod(checkoutData.order_id, method)
-      await fetchCheckoutData(false)
+      // Stay on step 3
+      await fetchCheckoutData(false, 3)
     } catch (err: any) {
       toast.error(err.message || "Failed to update payment method.")
     } finally {
@@ -960,6 +956,7 @@ export default function CheckoutPage() {
                     "flex-1 p-4 border rounded-lg cursor-pointer transition-colors",
                     mode === "pickup" && "border-orange-500 bg-orange-50",
                   )}
+                  onClick={() => mode === "pickup" && setActiveStep(2)}
                 >
                   <RadioGroupItem value="pickup" id="pickup" className="sr-only" />
                   Pickup
@@ -971,6 +968,7 @@ export default function CheckoutPage() {
                     mode === "delivery" && "border-orange-500 bg-orange-50",
                     isDeliveryDisabled && "opacity-50 cursor-not-allowed",
                   )}
+                  onClick={() => mode === "delivery" && setActiveStep(2)}
                 >
                   <RadioGroupItem value="delivery" id="delivery" className="sr-only" disabled={isDeliveryDisabled} />
                   Delivery
@@ -1009,6 +1007,9 @@ export default function CheckoutPage() {
                                 "flex-1 p-3 border rounded-lg cursor-pointer transition-colors text-center text-sm font-medium",
                                 pickupTiming === "asap" && "border-orange-500 bg-orange-50 text-orange-700",
                               )}
+                              onClick={() => {
+                                if (pickupTiming === "asap") setActiveStep(3)
+                              }}
                             >
                               <RadioGroupItem value="asap" id="pickup-asap" className="sr-only" />
                               Standard Pickup (ASAP)
@@ -1019,6 +1020,9 @@ export default function CheckoutPage() {
                                 "flex-1 p-3 border rounded-lg cursor-pointer transition-colors text-center text-sm font-medium",
                                 pickupTiming === "scheduled" && "border-orange-500 bg-orange-50 text-orange-700",
                               )}
+                              onClick={() => {
+                                if (pickupTiming === "scheduled" && pickupScheduledSlot) setActiveStep(3)
+                              }}
                             >
                               <RadioGroupItem value="scheduled" id="pickup-scheduled" className="sr-only" />
                               Schedule for Later

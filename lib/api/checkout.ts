@@ -346,7 +346,7 @@ export async function confirmOrder(orderId: number , checkoutData: any) {
       throw new Error(errorData?.message || `Failed to confirm order (Status: ${res.status})`)
     }
     //Add socket here .
-    if(checkoutData.order_status != 'scheduled'){
+    if (!checkoutData.pickup_time) {
     checkoutData.order_status = "confirmed"
     
     const branch = localStorage.getItem("selectedBranchId")
@@ -368,7 +368,7 @@ export async function confirmOrder(orderId: number , checkoutData: any) {
     });
     
     console.log("Socket response:", socket.status, await socket.text());
-    }
+  }
 
     return await res.json()
   } catch (error) {
