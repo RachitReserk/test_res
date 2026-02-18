@@ -571,10 +571,11 @@ export default function CheckoutPage() {
     }
   }
   
-  const handleProviderChange = async (provider: string) => {
+const handleProviderChange = async (provider: string) => {
       setSelectedProvider(provider)
       
-      // If an address is already selected, re-validate immediately with the new provider
+      setAddressValidationStatus({})
+      
       if (selectedAddressId) {
           setProcessingAction("address")
           const success = await validateAddressForDelivery(selectedAddressId, provider)

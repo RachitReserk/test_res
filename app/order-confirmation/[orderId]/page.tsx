@@ -19,9 +19,9 @@ export default function OrderConfirmationPage() {
   const [loading, setLoading] = useState(true)
   const [user, setUserData] = useState<any>(null)
 
-  useEffect(() => {
+useEffect(() => {
     const fetchUser = async () => {
-      setLoading(true)
+      // Removed setLoading(true) - User data shouldn't block the main UI
       const token = document.cookie
         .split("; ")
         .find((row) => row.startsWith("clientAuthToken="))
@@ -52,9 +52,8 @@ export default function OrderConfirmationPage() {
         })
       } catch (error) {
         console.error("Error fetching profile data:", error)
-      } finally {
-        setLoading(false)
-      }
+      } 
+      // Removed finally { setLoading(false) } - Let the order fetch handle the loading state
     }
     fetchUser()
   }, [])
@@ -77,12 +76,15 @@ export default function OrderConfirmationPage() {
         setOrder(data.order)
       } catch (err) {
         console.error("Error fetching order:", err)
+      } finally {
+        setLoading(false) // Logic moved here: Loading finishes only when the order is fetched
       }
     }
 
     if (orderId) fetchOrderDetails()
   }, [orderId])
 
+  
   const getStatusBadge = (status: string) => {
     const statusConfig = {
       pending: { variant: "secondary" as const, label: "Pending" },
