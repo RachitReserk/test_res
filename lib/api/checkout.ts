@@ -328,8 +328,8 @@ export async function getDeliveryQuote(orderId: number) {
   return await res.json()
 }
 
-// Add the following function at the end of the file:
-export async function confirmOrder(orderId: number , checkoutData: any) {
+
+export async function confirmOrder(orderId: number, checkoutData: any) {
   const token = getAuthToken()
 
   try {
@@ -345,38 +345,46 @@ export async function confirmOrder(orderId: number , checkoutData: any) {
       console.error("Error confirming order:", errorData)
       throw new Error(errorData?.message || `Failed to confirm order (Status: ${res.status})`)
     }
-    //Add socket here .
+
+    // 1. Parse the response immediately to get the new ID
+    const responseData = await res.json()
+
+    // Add socket here .
     if (!checkoutData.pickup_time) {
-    checkoutData.order_status = "confirmed"
-    
-    const branch = localStorage.getItem("selectedBranchId")
-    const restaurantId = process.env.NEXT_PUBLIC_RESTAURANT_ID
+      checkoutData.order_status = "confirmed"
+      
+      // 2. Attach the branch_order_id from the backend response to checkoutData
+      if (responseData.branch_order_id) {
+        checkoutData.branch_order_id = responseData.branch_order_id
+      }
 
-    const roomName = `restaurants/${restaurantId}/branches/${branch}/orders`;
+      const branch = localStorage.getItem("selectedBranchId")
+      const restaurantId = process.env.NEXT_PUBLIC_RESTAURANT_ID
 
-   const socket = await fetch(process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || "", {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.NEXT_PUBLIC_SOCKET_API_KEY || "",
-      },
-      body: JSON.stringify({
-        room: roomName,
-        event: 'new-order',
-        data: checkoutData, // The full order details for the admin panel
-      }),
-    });
-    
-    console.log("Socket response:", socket.status, await socket.text());
-  }
+      const roomName = `restaurants/${restaurantId}/branches/${branch}/orders`;
 
-    return await res.json()
+      const socket = await fetch(process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || "", {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.NEXT_PUBLIC_SOCKET_API_KEY || "",
+        },
+        body: JSON.stringify({
+          room: roomName,
+          event: 'new-order',
+          data: checkoutData, 
+        }),
+      });
+
+      console.log("Socket response:", socket.status, await socket.text());
+    }
+
+    return responseData
   } catch (error) {
     console.error("Error in confirmOrder function:", error)
     throw error
   }
 }
-
 // Add this new function to your existing checkout.ts file
 export async function createPaymentIntent(checkoutId: number) {
   const token = document.cookie
